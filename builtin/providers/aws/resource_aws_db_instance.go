@@ -349,7 +349,7 @@ func resourceAwsDbInstanceRead(d *schema.ResourceData, meta interface{}) error {
 	arn, err := buildRDSARN(d, meta)
 	if err != nil {
 		name := "<empty>"
-		if v.DBName != "" {
+		if v.DBName != aws.String("") {
 			name = *v.DBName
 		}
 

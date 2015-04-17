@@ -115,6 +115,30 @@ func TestContext2Plan_modules(t *testing.T) {
 	}
 }
 
+// GH-1475
+func TestContext2Plan_moduleCycle(t *testing.T) {
+	m := testModule(t, "plan-module-cycle")
+	p := testProvider("aws")
+	p.DiffFn = testDiffFn
+	ctx := testContext2(t, &ContextOpts{
+		Module: m,
+		Providers: map[string]ResourceProviderFactory{
+			"aws": testProviderFuncFixed(p),
+		},
+	})
+
+	plan, err := ctx.Plan()
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	actual := strings.TrimSpace(plan.String())
+	expected := strings.TrimSpace(testTerraformPlanModuleCycleStr)
+	if actual != expected {
+		t.Fatalf("bad:\n%s", actual)
+	}
+}
+
 func TestContext2Plan_moduleInput(t *testing.T) {
 	m := testModule(t, "plan-module-input")
 	p := testProvider("aws")
@@ -477,6 +501,112 @@ func TestContext2Plan_nil(t *testing.T) {
 	}
 	if len(plan.Diff.RootModule().Resources) != 0 {
 		t.Fatalf("bad: %#v", plan.Diff.RootModule().Resources)
+	}
+}
+
+func TestContext2Plan_preventDestroy_bad(t *testing.T) {
+	m := testModule(t, "plan-prevent-destroy-bad")
+	p := testProvider("aws")
+	p.DiffFn = testDiffFn
+	ctx := testContext2(t, &ContextOpts{
+		Module: m,
+		Providers: map[string]ResourceProviderFactory{
+			"aws": testProviderFuncFixed(p),
+		},
+		State: &State{
+			Modules: []*ModuleState{
+				&ModuleState{
+					Path: rootModulePath,
+					Resources: map[string]*ResourceState{
+						"aws_instance.foo": &ResourceState{
+							Type: "aws_instance",
+							Primary: &InstanceState{
+								ID: "i-abc123",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	plan, err := ctx.Plan()
+
+	expectedErr := "aws_instance.foo: plan would destroy"
+	if !strings.Contains(fmt.Sprintf("%s", err), expectedErr) {
+		t.Fatalf("expected err would contain %q\nerr: %s\nplan: %s",
+			expectedErr, err, plan)
+	}
+}
+
+func TestContext2Plan_preventDestroy_good(t *testing.T) {
+	m := testModule(t, "plan-prevent-destroy-good")
+	p := testProvider("aws")
+	p.DiffFn = testDiffFn
+	ctx := testContext2(t, &ContextOpts{
+		Module: m,
+		Providers: map[string]ResourceProviderFactory{
+			"aws": testProviderFuncFixed(p),
+		},
+		State: &State{
+			Modules: []*ModuleState{
+				&ModuleState{
+					Path: rootModulePath,
+					Resources: map[string]*ResourceState{
+						"aws_instance.foo": &ResourceState{
+							Type: "aws_instance",
+							Primary: &InstanceState{
+								ID: "i-abc123",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	plan, err := ctx.Plan()
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if !plan.Diff.Empty() {
+		t.Fatalf("Expected empty plan, got %s", plan.String())
+	}
+}
+
+func TestContext2Plan_preventDestroy_destroyPlan(t *testing.T) {
+	m := testModule(t, "plan-prevent-destroy-good")
+	p := testProvider("aws")
+	p.DiffFn = testDiffFn
+	ctx := testContext2(t, &ContextOpts{
+		Module: m,
+		Providers: map[string]ResourceProviderFactory{
+			"aws": testProviderFuncFixed(p),
+		},
+		State: &State{
+			Modules: []*ModuleState{
+				&ModuleState{
+					Path: rootModulePath,
+					Resources: map[string]*ResourceState{
+						"aws_instance.foo": &ResourceState{
+							Type: "aws_instance",
+							Primary: &InstanceState{
+								ID: "i-abc123",
+							},
+						},
+					},
+				},
+			},
+		},
+		Destroy: true,
+	})
+
+	plan, err := ctx.Plan()
+
+	expectedErr := "aws_instance.foo: plan would destroy"
+	if !strings.Contains(fmt.Sprintf("%s", err), expectedErr) {
+		t.Fatalf("expected err would contain %q\nerr: %s\nplan: %s",
+			expectedErr, err, plan)
 	}
 }
 
@@ -1845,6 +1975,54 @@ func TestContext2Refresh_noState(t *testing.T) {
 	}
 }
 
+func TestContext2Refresh_output(t *testing.T) {
+	p := testProvider("aws")
+	m := testModule(t, "refresh-output")
+	ctx := testContext2(t, &ContextOpts{
+		Module: m,
+		Providers: map[string]ResourceProviderFactory{
+			"aws": testProviderFuncFixed(p),
+		},
+		State: &State{
+			Modules: []*ModuleState{
+				&ModuleState{
+					Path: rootModulePath,
+					Resources: map[string]*ResourceState{
+						"aws_instance.web": &ResourceState{
+							Type: "aws_instance",
+							Primary: &InstanceState{
+								ID: "foo",
+								Attributes: map[string]string{
+									"foo": "bar",
+								},
+							},
+						},
+					},
+
+					Outputs: map[string]string{
+						"foo": "foo",
+					},
+				},
+			},
+		},
+	})
+
+	p.RefreshFn = func(info *InstanceInfo, s *InstanceState) (*InstanceState, error) {
+		return s, nil
+	}
+
+	s, err := ctx.Refresh()
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	actual := strings.TrimSpace(s.String())
+	expected := strings.TrimSpace(testContextRefreshOutputStr)
+	if actual != expected {
+		t.Fatalf("bad:\n\n%s\n\n%s", actual, expected)
+	}
+}
+
 func TestContext2Refresh_outputPartial(t *testing.T) {
 	p := testProvider("aws")
 	m := testModule(t, "refresh-output-partial")
@@ -2924,6 +3102,35 @@ func TestContext2Input_providerVars(t *testing.T) {
 
 	if !reflect.DeepEqual(actual, "bar") {
 		t.Fatalf("bad: %#v", actual)
+	}
+}
+
+func TestContext2Input_providerVarsModuleInherit(t *testing.T) {
+	input := new(MockUIInput)
+	m := testModule(t, "input-provider-with-vars-and-module")
+	p := testProvider("aws")
+	p.ApplyFn = testApplyFn
+	p.DiffFn = testDiffFn
+	ctx := testContext2(t, &ContextOpts{
+		Module: m,
+		Providers: map[string]ResourceProviderFactory{
+			"aws": testProviderFuncFixed(p),
+		},
+		UIInput: input,
+	})
+
+	p.InputFn = func(i UIInput, c *ResourceConfig) (*ResourceConfig, error) {
+		if errs := c.CheckSet([]string{"access_key"}); len(errs) > 0 {
+			return c, errs[0]
+		}
+		return c, nil
+	}
+	p.ConfigureFn = func(c *ResourceConfig) error {
+		return nil
+	}
+
+	if err := ctx.Input(InputModeStd); err != nil {
+		t.Fatalf("err: %s", err)
 	}
 }
 
@@ -5993,6 +6200,16 @@ aws_instance.web: (1 tainted)
 module.child:
   aws_instance.web:
     ID = new
+`
+
+const testContextRefreshOutputStr = `
+aws_instance.web:
+  ID = foo
+  foo = bar
+
+Outputs:
+
+foo = bar
 `
 
 const testContextRefreshOutputPartialStr = `

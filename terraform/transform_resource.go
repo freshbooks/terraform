@@ -263,6 +263,10 @@ func (n *graphNodeExpandedResource) EvalTree() EvalNode {
 					Output:      &diff,
 					OutputState: &state,
 				},
+				&EvalCheckPreventDestroy{
+					Resource: n.Resource,
+					Diff:     &diff,
+				},
 				&EvalWriteState{
 					Name:         n.stateId(),
 					ResourceType: n.Resource.Type,
@@ -294,6 +298,10 @@ func (n *graphNodeExpandedResource) EvalTree() EvalNode {
 					Info:   info,
 					State:  &state,
 					Output: &diff,
+				},
+				&EvalCheckPreventDestroy{
+					Resource: n.Resource,
+					Diff:     &diff,
 				},
 				&EvalWriteDiff{
 					Name: n.stateId(),
@@ -560,19 +568,9 @@ func (n *graphNodeExpandedResourceDestroy) EvalTree() EvalNode {
 					Name:   n.ProvidedBy()[0],
 					Output: &provider,
 				},
-				&EvalIf{
-					If: func(ctx EvalContext) (bool, error) {
-						return n.Resource.Lifecycle.CreateBeforeDestroy, nil
-					},
-					Then: &EvalReadStateTainted{
-						Name:   n.stateId(),
-						Output: &state,
-						Index:  -1,
-					},
-					Else: &EvalReadState{
-						Name:   n.stateId(),
-						Output: &state,
-					},
+				&EvalReadState{
+					Name:   n.stateId(),
+					Output: &state,
 				},
 				&EvalRequireState{
 					State: &state,
